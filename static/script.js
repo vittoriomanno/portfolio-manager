@@ -122,12 +122,10 @@ async function fetchLogs() {
             else if (log.msg.includes('SELL')) typeClass = 'sell';
             else if (log.msg.includes('HOLD')) typeClass = 'hold';
 
-            const formatMsg = log.msg.includes('\n') ? `<pre style="white-space: pre-wrap; margin:0; font-family: inherit; font-size: 0.9em; overflow-x: auto; max-height: 400px;">${log.msg}</pre>` : log.msg;
-
             div.className = `log-entry ${typeClass}`;
             div.innerHTML = `
                 <div class="log-time">${log.time} | ${log.type.toUpperCase()}</div>
-                <div class="log-msg" style="padding-top: 5px;">${formatMsg}</div>
+                <div class="log-msg">${log.msg}</div>
             `;
             container.appendChild(div);
         });
