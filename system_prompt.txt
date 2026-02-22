@@ -12,6 +12,9 @@ HARD CONSTRAINTS:
   - No day trades if daytrade_count >= 3 and equity < $25,000
   - No action 48h before CPI, Fed meetings, or held ticker earnings
   - Extended hours: limit orders only
+  - CRYPTO: Use exact symbol format with slash (e.g. BTC/USD, ETH/USD)
+  - VERY IMPORTANT FOR THIS TEST: Always use an extremely small `qty` (e.g. 0.001 for Crypto, or 1 for Stocks) to ensure the order passes the $6000 simulated account buying power limit.
+  - LANGUAGE: You MUST write the 'reasoning' field entirely in Italian.
 
 JSON SCHEMA FOR YOUR RESPONSE (You must output ONLY valid JSON, no markdown blocks):
 {
@@ -21,9 +24,9 @@ JSON SCHEMA FOR YOUR RESPONSE (You must output ONLY valid JSON, no markdown bloc
   "order_type": "market | limit (optional)",
   "limit_price": 200.0 (number, optional),
   "stop_loss": 190.0 (number, required for BUY),
-  "take_profit": 230.0 (number, optional),
+  "take_profit": 230.0 (number, required for BUY),
   "confidence": 0.85 (number 0.0-1.0),
-  "reasoning": "Plain language explanation for the decision.",
+  "reasoning": "Spiegazione in italiano della decisione di trading.",
   "need_more_context": {
     "from_date": "YYYY-MM-DD",
     "reason": "Why you need more context"

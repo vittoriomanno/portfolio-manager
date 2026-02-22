@@ -67,17 +67,29 @@ def portfolio():
 @app.route('/api/log')
 def logs():
     data = []
-    # Read decisions
+    # Read decisions (Handling multi-line blocks separated by dashes)
     if os.path.exists('decisions.log'):
-        with open('decisions.log', 'r') as f:
-            for line in f:
-                if '|' in line:
-                    parts = line.split('|', 1)
-                    data.append({"type": "decision", "time": parts[0].strip(), "msg": parts[1].strip()})
+        with open('decisions.log', 'r', encoding='utf-8') as f:
+            content = f.read()
+            blocks = content.split('-' * 60)
+            for block in blocks:
+                block = block.strip()
+                if not block: continue
+                # Extract time if available
+                # Usually starts with [YYYY-MM-DD HH:MM:SS]
+                time_str = "Unknown"
+                if block.startswith('['):
+                    time_end = block.find(']')
+                    if time_end != -1:
+                        time_str = block[1:time_end]
+                elif '|' in block.split('\n')[0]:
+                    time_str = block.split('\n')[0].split('|')[0].strip()
+                    
+                data.append({"type": "decision", "time": time_str, "msg": block})
     
-    # Read trades
+    # Read trades (Single line format)
     if os.path.exists('trades.log'):
-        with open('trades.log', 'r') as f:
+        with open('trades.log', 'r', encoding='utf-8') as f:
             for line in f:
                 if '|' in line:
                     parts = line.split('|', 1)

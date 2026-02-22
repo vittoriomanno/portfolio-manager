@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 # Alpaca API
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import GetOrdersRequest
+from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest
@@ -135,7 +135,7 @@ def read_log(filename, from_date=None, default_days=14):
         return ""
     
     try:
-        with open(filename, 'r') as f:
+        with open(filename, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         
         # Simple date filtering based on line prefix assumption (YYYY-MM-DD)
@@ -186,7 +186,7 @@ Phase 3 — VALIDATION:
 def ask_claude(sys_prompt, user_prompt):
     try:
         response = anthropic_client.messages.create(
-            model="claude-3-7-sonnet-20250219", # Hardcoded model
+            model="claude-sonnet-4-6", # Hardcoded model from user
             max_tokens=2000,
             system=sys_prompt,
             messages=[
@@ -202,13 +202,14 @@ def ask_claude(sys_prompt, user_prompt):
         
         return json.loads(content)
     except Exception as e:
-        log.error(f"Error communicating with Claude: {e}")
+        import traceback
+        log.error(f"Error communicating with Claude: {e}\n{traceback.format_exc()}")
         return None
 
 def write_log(filename, content):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
     try:
-        with open(filename, 'a') as f:
+        with open(filename, 'a', encoding='utf-8') as f:
             f.write(f"{timestamp} | {content}\n")
     except Exception as e:
         log.error(f"Error writing to {filename}: {e}")
@@ -218,14 +219,17 @@ def notify_telegram(decision):
         return
     
     action = decision.get('action')
-    ticker = decision.get('ticker', 'UNKNOWN')
+    ticker = decision.get('ticker', 'SCONOSCIUTO')
     
     icon = "🟢" if action == "BUY" else "🔴"
     msg = f"{icon} {action} {ticker}\n━━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"Reasoning: {decision.get('reasoning', '')}\n\n"
+    msg += f"Motivazione: {decision.get('reasoning', '')}\n\n"
     
     if action == "BUY":
-        msg += f"Expected: TP ${decision.get('take_profit', 'N/A')} | SL ${decision.get('stop_loss', 'N/A')} | Confidence {decision.get('confidence', '')}"
+        tp = decision.get('take_profit', 'Non specificato')
+        sl = decision.get('stop_loss', 'Non specificato')
+        conf = decision.get('confidence', 'N/D')
+        msg += f"Previsto: TP ${tp} | SL ${sl} | Confidenza {conf}"
     
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -233,7 +237,7 @@ def notify_telegram(decision):
     except Exception as e:
         log.warning(f"Telegram failed (non-blocking): {e}")
 
-def execute_decision(decision):
+def execute_decision(decision, prompt=None):
     action = decision.get('action')
     ticker = decision.get('ticker')
     qty = decision.get('qty', 0)
@@ -244,13 +248,23 @@ def execute_decision(decision):
         
     if action == 'HOLD':
         reason = decision.get('reasoning', 'No reason provided')
-        write_log('decisions.log', f"HOLD: {reason}")
+        summary = f"HOLD: {reason}"
+        if prompt:
+            log_entry = f"PYTHON PROMPT:\n{prompt}\n\nCLAUDE DECISION:\n{json.dumps(decision, indent=2)}\n" + ("-" * 60)
+            write_log('decisions.log', log_entry)
+        else:
+            write_log('decisions.log', summary)
         log.info("Claude decided to HOLD.")
         return
         
     if action == 'ADJUST':
         reason = decision.get('reasoning', 'No reason provided')
-        write_log('decisions.log', f"ADJUST {ticker}: {reason}")
+        summary = f"ADJUST {ticker}: {reason}"
+        if prompt:
+            log_entry = f"PYTHON PROMPT:\n{prompt}\n\nCLAUDE DECISION:\n{json.dumps(decision, indent=2)}\n" + ("-" * 60)
+            write_log('decisions.log', log_entry)
+        else:
+            write_log('decisions.log', summary)
         log.info(f"Claude decided to ADJUST {ticker}.")
         # (Trailing stop adjust logic would go here in a full implementation)
         return
@@ -276,31 +290,36 @@ def execute_decision(decision):
             take_profit = {"limit_price": float(decision.get('take_profit'))}
         if action == 'BUY' and decision.get('stop_loss'):
             stop_loss = {"stop_price": float(decision.get('stop_loss'))}
-            
-        kwargs = {
+        
+        tif = TimeInForce.GTC if '/' in ticker else TimeInForce.DAY # Crypto is 24/7
+        
+        order_kwargs = {
             "symbol": ticker,
             "qty": qty,
             "side": side,
-            "time_in_force": TimeInForce.DAY,
+            "time_in_force": tif,
         }
         
         if order_type_str == 'limit':
-            kwargs['limit_price'] = float(decision.get('limit_price', 0))
-            kwargs['type'] = 'limit'
+            order_kwargs['limit_price'] = float(decision.get('limit_price', 0))
             if side == OrderSide.BUY:
-                kwargs['order_class'] = OrderClass.BRACKET
-                kwargs['take_profit'] = take_profit
-                kwargs['stop_loss'] = stop_loss
-            trading_client.submit_order(**kwargs)
+                order_kwargs['order_class'] = OrderClass.BRACKET
+                if take_profit: order_kwargs['take_profit'] = take_profit
+                if stop_loss: order_kwargs['stop_loss'] = stop_loss
+            req = LimitOrderRequest(**order_kwargs)
+            trading_client.submit_order(order_data=req)
         else:
-            kwargs['type'] = 'market'
-            trading_client.submit_order(**kwargs)
-            # Cannot normally market bracket directly with basic func easily, would need nested objects, 
-            # assuming limit logic or simple market order for MVP
+            req = MarketOrderRequest(**order_kwargs)
+            trading_client.submit_order(order_data=req)
             
         # Logging & Notify
         summary = f"{action} {qty} {ticker} | Conf: {decision.get('confidence')} | Reason: {decision.get('reasoning')}"
-        write_log('decisions.log', summary)
+        if prompt:
+            log_entry = f"PYTHON PROMPT:\n{prompt}\n\nCLAUDE DECISION:\n{json.dumps(decision, indent=2)}\n" + ("-" * 60)
+            write_log('decisions.log', log_entry)
+        else:
+            write_log('decisions.log', summary)
+            
         write_log('trades.log', f"{action} {ticker} | Qty: {qty} | SL: {decision.get('stop_loss')} | TP: {decision.get('take_profit')} | Conf: {decision.get('confidence')} | Thesis: {decision.get('reasoning')}")
         notify_telegram(decision)
         log.info(f"Executed: {summary}")
@@ -338,10 +357,10 @@ def run_cycle():
             if retries >= 3:
                 log.warning("Max context retries reached. Forcing HOLD.")
                 decision = {"action": "HOLD", "reasoning": "Forced hold due to max context retries exceeded."}
-                execute_decision(decision)
+                execute_decision(decision, prompt)
                 break
         else:
-            execute_decision(decision)
+            execute_decision(decision, prompt)
             break
             
     return True
