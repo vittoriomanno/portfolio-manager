@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.env
+decisions.log
+trades.log
+app.log

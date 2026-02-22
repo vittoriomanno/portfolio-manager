@@ -1,0 +1,14 @@
+[Unit]
+Description=AI Portfolio Manager Trading Core
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/portfolio_manager
+Environment="PATH=/opt/portfolio_manager/venv/bin"
+ExecStart=/opt/portfolio_manager/venv/bin/python main.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Portfolio Manager</title>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Vanilla CSS -->
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Chart.js for premium aesthetic -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar / Topbar equivalent -->
+        <header class="navbar">
+            <div class="nav-left">
+                <div class="logo">
+                    <div class="logo-icon"></div>
+                    <span class="logo-text">AITrade</span>
+                </div>
+                <nav class="nav-links">
+                    <a href="#" class="active" data-tab="home">Dashboard</a>
+                    <a href="#" data-tab="decisions">Decisions</a>
+                    <a href="#" data-tab="system">System Logs</a>
+                </nav>
+            </div>
+            <div class="nav-right">
+                <div class="status-badge" id="session-status">
+                    <span class="dot"></span> <span id="session-text">Loading...</span>
+                </div>
+                <button class="btn-primary">Settings <span class="arrow">→</span></button>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <!-- HOME TAB -->
+            <div id="tab-home" class="tab-pane active">
+                <div class="dashboard-grid">
+                    <!-- Left Column -->
+                    <div class="left-col">
+                        <!-- Chart Section (Wow factor) -->
+                        <div class="card chart-card">
+                            <div class="card-header">
+                                <div class="pair-info">
+                                    <div class="icons">
+                                        <div class="icon-circle primary-bg">$</div>
+                                    </div>
+                                    <h2>Total Equity</h2>
+                                </div>
+                                <div class="chart-actions">
+                                    <button class="icon-btn active">1h</button>
+                                    <button class="icon-btn">24h</button>
+                                    <button class="icon-btn">1w</button>
+                                </div>
+                            </div>
+                            <div class="price-display">
+                                <h1 id="total-equity">$0.00</h1>
+                                <span class="change positive" id="day-pl">+0.00% today</span>
+                            </div>
+                            <div class="chart-container">
+                                <canvas id="equityChart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Positions Table -->
+                        <div class="card table-card">
+                            <div class="card-header">
+                                <h3>Open Positions</h3>
+                            </div>
+                            <table class="data-table" id="positions-table">
+                                <thead>
+                                    <tr>
+                                        <th>Asset</th>
+                                        <th>Price</th>
+                                        <th>Amount</th>
+                                        <th>P&L</th>
+                                        <th>Total Value</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <!-- Dynamic rows -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Right Column -->
+                    <div class="right-col">
+                        <!-- Navigation / Action Switch -->
+                        <div class="action-switch">
+                            <button class="active">KPIs</button>
+                            <button>Stats</button>
+                            <div class="icons-right">
+                                <span>↻</span>
+                                <span>⚙</span>
+                            </div>
+                        </div>
+
+                        <!-- KPI Cards matching LumaTrade exchange boxes -->
+                        <div class="kpi-exchange-box">
+                            <div class="kpi-row">
+                                <div class="kpi-left">
+                                    <div class="icon-circle outline">C</div>
+                                    <span class="kpi-label">Cash</span>
+                                </div>
+                                <div class="kpi-right">
+                                    <span class="kpi-subtext">Available</span>
+                                </div>
+                            </div>
+                            <div class="kpi-value" id="cash-available">0.00</div>
+                        </div>
+
+                        <div class="kpi-exchange-box">
+                            <div class="kpi-row">
+                                <div class="kpi-left">
+                                    <div class="icon-circle outline">B</div>
+                                    <span class="kpi-label">Buying Power</span>
+                                </div>
+                                <div class="kpi-right">
+                                    <span class="kpi-subtext">Total Limit</span>
+                                </div>
+                            </div>
+                            <div class="kpi-value" id="buying-power">0.00</div>
+                        </div>
+
+                        <button class="btn-primary full-width mt-15">Force Claude Cycle</button>
+                        <button class="btn-secondary full-width mt-10">Kill Switch / Halt</button>
+
+                        <div class="card summary-card mt-15">
+                            <div class="card-header summary-header">
+                                <span class="summary-label">Day Trades Allowed</span>
+                            </div>
+                            <div class="summary-body">
+                                <h2 id="day-trades">3 <span class="unit">left</span></h2>
+                            </div>
+                            <div class="summary-footer">
+                                <div class="footer-item">
+                                    <span>Positions</span>
+                                    <span class="value" id="pos-count">0/5</span>
+                                </div>
+                                <div class="footer-item">
+                                    <span>Status</span>
+                                    <span class="value">Active</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- DECISIONS LOG TAB -->
+            <div id="tab-decisions" class="tab-pane">
+                <div class="card full-height">
+                    <div class="card-header">
+                        <h3>Claude AI Reasoning Log</h3>
+                    </div>
+                    <div class="log-container" id="decisions-log">
+                        <!-- Dynamic logs -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- SYSTEM LOG TAB -->
+            <div id="tab-system" class="tab-pane">
+                <div class="card full-height">
+                    <div class="card-header">
+                        <h3>System Application Logs (app.log)</h3>
+                    </div>
+                    <div class="log-container terminal" id="app-log">
+                        <!-- Dynamic app logs -->
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
