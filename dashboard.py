@@ -69,7 +69,7 @@ def logs():
     data = []
     # Read decisions
     if os.path.exists('decisions.log'):
-        with open('decisions.log', 'r') as f:
+        with open('decisions.log', 'r', encoding='utf-8') as f:
             for line in f:
                 if '|' in line:
                     parts = line.split('|', 1)
@@ -77,7 +77,7 @@ def logs():
     
     # Read trades
     if os.path.exists('trades.log'):
-        with open('trades.log', 'r') as f:
+        with open('trades.log', 'r', encoding='utf-8') as f:
             for line in f:
                 if '|' in line:
                     parts = line.split('|', 1)
@@ -91,7 +91,7 @@ def logs():
 def applog():
     lines = []
     if os.path.exists('app.log'):
-        with open('app.log', 'r') as f:
+        with open('app.log', 'r', encoding='utf-8') as f:
             lines = f.readlines()[-50:] # last 50 lines
     return jsonify({"logs": lines})
 

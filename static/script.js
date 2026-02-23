@@ -58,7 +58,7 @@ function formatCurrency(num) {
 // Fetch Logic
 async function fetchPortfolio() {
     try {
-        const res = await fetch('/api/portfolio');
+        const res = await fetch('/api/portfolio', { cache: 'no-store' });
         const data = await res.json();
 
         document.getElementById('total-equity').textContent = formatCurrency(data.equity);
@@ -110,7 +110,7 @@ async function fetchPortfolio() {
 
 async function fetchLogs() {
     try {
-        const res = await fetch('/api/log');
+        const res = await fetch('/api/log', { cache: 'no-store' });
         const data = await res.json();
         const container = document.getElementById('decisions-log');
         container.innerHTML = '';
@@ -134,7 +134,7 @@ async function fetchLogs() {
 
 async function fetchAppLogs() {
     try {
-        const res = await fetch('/api/applog');
+        const res = await fetch('/api/applog', { cache: 'no-store' });
         const data = await res.json();
         const container = document.getElementById('app-log');
         container.innerHTML = '';
