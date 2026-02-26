@@ -1,6 +1,6 @@
 import os
 import json
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 from dotenv import load_dotenv
 from alpaca.trading.client import TradingClient
 
@@ -20,6 +20,83 @@ if not dummy_mode:
     except Exception as e:
         print(f"Failed to load alpaca data API: {e}")
         dummy_mode = True
+
+
+@app.after_request
+def add_cache_headers(response):
+    """Prevent browser/proxy caching on all API responses."""
+    if request.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
+
+
+def tail_lines(filepath, max_lines=200, filter_fn=None):
+    """Read last max_lines from a file efficiently using seek from end.
+
+    Optional filter_fn applied per line. Returns list of strings.
+    """
+    if not os.path.exists(filepath):
+        return []
+    try:
+        with open(filepath, 'rb') as f:
+            f.seek(0, 2)  # seek to end
+            file_size = f.tell()
+            if file_size == 0:
+                return []
+
+            # Read in chunks from the end
+            chunk_size = 8192
+            lines = []
+            remaining = b''
+            pos = file_size
+
+            while pos > 0 and len(lines) < max_lines * 3:  # over-read to account for filtering
+                read_size = min(chunk_size, pos)
+                pos -= read_size
+                f.seek(pos)
+                chunk = f.read(read_size) + remaining
+                split = chunk.split(b'\n')
+                remaining = split[0]
+                for raw_line in reversed(split[1:]):
+                    try:
+                        line = raw_line.decode('utf-8', errors='replace')
+                    except Exception:
+                        continue
+                    if filter_fn and not filter_fn(line):
+                        continue
+                    lines.append(line)
+                    if len(lines) >= max_lines:
+                        break
+                if len(lines) >= max_lines:
+                    break
+
+            # Handle the very first line of the file (leftover in remaining)
+            if len(lines) < max_lines and remaining:
+                try:
+                    line = remaining.decode('utf-8', errors='replace')
+                    if not filter_fn or filter_fn(line):
+                        lines.append(line)
+                except Exception:
+                    pass
+
+            lines.reverse()
+            return lines
+    except Exception:
+        return []
+
+
+def tail_log_entries(filepath, max_entries=200):
+    """Read last max_entries pipe-delimited log entries from a file efficiently."""
+    lines = tail_lines(filepath, max_lines=max_entries, filter_fn=lambda l: '|' in l)
+    entries = []
+    for line in lines:
+        parts = line.split('|', 1)
+        if len(parts) == 2:
+            entries.append((parts[0].strip(), parts[1].strip()))
+    return entries
+
 
 @app.route('/')
 def index():
@@ -41,7 +118,7 @@ def portfolio():
     try:
         account = trading_client.get_account()
         positions = trading_client.get_all_positions()
-        
+
         pos_list = []
         for p in positions:
             pos_list.append({
@@ -66,33 +143,32 @@ def portfolio():
 
 @app.route('/api/log')
 def logs():
+    decisions = tail_log_entries('decisions.log', max_entries=200)
+    trades = tail_log_entries('trades.log', max_entries=200)
+
     data = []
-    # Read decisions
-    if os.path.exists('decisions.log'):
-        with open('decisions.log', 'r', encoding='utf-8') as f:
-            for line in f:
-                if '|' in line:
-                    parts = line.split('|', 1)
-                    data.append({"type": "decision", "time": parts[0].strip(), "msg": parts[1].strip()})
-    
-    # Read trades
-    if os.path.exists('trades.log'):
-        with open('trades.log', 'r', encoding='utf-8') as f:
-            for line in f:
-                if '|' in line:
-                    parts = line.split('|', 1)
-                    data.append({"type": "trade", "time": parts[0].strip(), "msg": parts[1].strip()})
-                    
+    for time_str, msg in decisions:
+        data.append({"type": "decision", "time": time_str, "msg": msg})
+    for time_str, msg in trades:
+        data.append({"type": "trade", "time": time_str, "msg": msg})
+
     # Sort by time desc
     data.sort(key=lambda x: x['time'], reverse=True)
-    return jsonify(data)
+    return jsonify(data[:200])
 
 @app.route('/api/applog')
 def applog():
-    lines = []
-    if os.path.exists('app.log'):
-        with open('app.log', 'r', encoding='utf-8') as f:
-            lines = f.readlines()[-50:] # last 50 lines
+    def is_info_or_above(line):
+        """Filter out DEBUG lines (which contain full Claude prompts)."""
+        if not line.strip():
+            return False
+        # Standard logging format: "2025-01-15 08:00:00 - portfolio_manager - DEBUG - ..."
+        # Accept lines that contain INFO, WARNING, ERROR, CRITICAL; reject DEBUG
+        if ' - DEBUG - ' in line:
+            return False
+        return True
+
+    lines = tail_lines('app.log', max_lines=200, filter_fn=is_info_or_above)
     return jsonify({"logs": lines})
 
 if __name__ == '__main__':

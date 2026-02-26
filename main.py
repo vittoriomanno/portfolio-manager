@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import json
 import logging
@@ -14,11 +15,15 @@ from alpaca.trading.requests import (
     MarketOrderRequest, LimitOrderRequest, GetOrdersRequest
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass, QueryOrderStatus
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockSnapshotRequest
+from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
+from alpaca.data.requests import (
+    StockSnapshotRequest, StockLatestQuoteRequest, StockBarsRequest,
+    CryptoLatestQuoteRequest, CryptoBarsRequest,
+)
+from alpaca.data.timeframe import TimeFrame
 
 # Anthropic
-from anthropic import Anthropic
+from anthropic import Anthropic, APIStatusError, OverloadedError
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 # Console → INFO only (clean output)
@@ -67,7 +72,7 @@ trading_client   = TradingClient(ALPACA_KEY, ALPACA_SECRET, paper=ALPACA_PAPER)
 data_client      = StockHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)  # FIX #3: was never instantiated
 anthropic_client = Anthropic(api_key=ANTHROPIC_KEY)
 
-ALLOWED_ACTIONS = {'BUY', 'SELL', 'HOLD', 'ADJUST', 'NEED_MORE_CONTEXT'}
+ALLOWED_ACTIONS = {'BUY', 'SELL', 'HOLD', 'ADJUST', 'NEED_MORE_CONTEXT', 'REQUEST_DATA'}
 _asset_cache    = {}  # FIX #12: crypto detection cache
 
 # ── Session ───────────────────────────────────────────────────────────────────
@@ -288,6 +293,103 @@ def get_market_briefing(positions: list) -> str:
     return briefing
 
 
+def _format_ticker_block(symbol: str, quote, bars: list) -> str:
+    """Format one ticker's market data as a human-readable string block."""
+    try:
+        bid = f"${quote.bid_price:.2f}" if (quote and quote.bid_price) else "N/A"
+        ask = f"${quote.ask_price:.2f}" if (quote and quote.ask_price) else "N/A"
+
+        if bars:
+            latest     = bars[-1]
+            change_str = "N/A"
+            if len(bars) >= 2 and bars[-2].close:
+                pct        = (latest.close - bars[-2].close) / bars[-2].close * 100
+                change_str = f"{pct:+.2f}%"
+            vol     = latest.volume or 0
+            vol_str = f"{vol / 1e6:.1f}M" if vol >= 1_000_000 else str(int(vol))
+            hist    = [f"{b.close:.2f}" for b in bars[-21:-1]] if len(bars) > 1 else []
+            return (
+                f"{symbol} | Last: ${latest.close:.2f} | Bid: {bid} | Ask: {ask}\n"
+                f"     Today: O ${latest.open:.2f} H ${latest.high:.2f} "
+                f"L ${latest.low:.2f} C ${latest.close:.2f}"
+                f" | Change: {change_str} | Vol: {vol_str}\n"
+                f"     Last {len(hist)} days close: {', '.join(hist) if hist else 'N/A'}\n\n"
+            )
+        return f"{symbol} | No bar data | Bid: {bid} | Ask: {ask}\n\n"
+    except Exception as e:
+        log.warning(f"Error formatting data for {symbol}: {e}")
+        return f"{symbol} | Data unavailable\n\n"
+
+
+def fetch_market_data(tickers: list) -> str:
+    """
+    Phase 2 data fetch: OHLCV (last 21 daily bars) + latest quote for each requested ticker.
+    Returns formatted BLOCK 6 string to append to the Phase 2 prompt.
+    Handles stock and crypto tickers separately; errors per-ticker are non-fatal.
+    """
+    now_et = datetime.now(ET)
+    block  = (
+        f"--- BLOCK 6: MARKET DATA (Real-Time) ---\n"
+        f"Fetched at: {now_et.strftime('%Y-%m-%d %H:%M')} ET\n\n"
+    )
+
+    stock_tickers  = [t for t in tickers if not is_crypto(t)]
+    crypto_tickers = [t for t in tickers if is_crypto(t)]
+
+    # ── Stocks ────────────────────────────────────────────────────────────────
+    if stock_tickers:
+        quotes   = {}
+        bars_map = {sym: [] for sym in stock_tickers}
+
+        try:
+            quotes = data_client.get_stock_latest_quote(
+                StockLatestQuoteRequest(symbol_or_symbols=stock_tickers)
+            )
+        except Exception as e:
+            log.warning(f"Stock latest quotes unavailable: {e}")
+
+        try:
+            b_res = data_client.get_stock_bars(
+                StockBarsRequest(symbol_or_symbols=stock_tickers, timeframe=TimeFrame.Day, limit=21)
+            )
+            for sym in stock_tickers:
+                try:
+                    bars_map[sym] = list(b_res[sym])
+                except Exception:
+                    pass
+        except Exception as e:
+            log.warning(f"Stock bars unavailable: {e}")
+
+        for sym in stock_tickers:
+            block += _format_ticker_block(sym, quotes.get(sym), bars_map[sym])
+
+    # ── Crypto ────────────────────────────────────────────────────────────────
+    if crypto_tickers:
+        c_quotes   = {}
+        c_bars_map = {sym: [] for sym in crypto_tickers}
+
+        try:
+            cc      = CryptoHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
+            c_quotes = cc.get_crypto_latest_quote(
+                CryptoLatestQuoteRequest(symbol_or_symbols=crypto_tickers)
+            )
+            c_res = cc.get_crypto_bars(
+                CryptoBarsRequest(symbol_or_symbols=crypto_tickers, timeframe=TimeFrame.Day, limit=21)
+            )
+            for sym in crypto_tickers:
+                try:
+                    c_bars_map[sym] = list(c_res[sym])
+                except Exception:
+                    pass
+        except Exception as e:
+            log.warning(f"Crypto market data unavailable: {e}")
+
+        for sym in crypto_tickers:
+            block += _format_ticker_block(sym, c_quotes.get(sym), c_bars_map[sym])
+
+    return block
+
+
 def read_log(filename: str, from_date: str = None, default_days: int = DEFAULT_LOG_DAYS) -> str:
     """Read log file filtered by date. Falls back to last 100 lines if no matches."""
     if not os.path.exists(filename):
@@ -341,6 +443,7 @@ Phase 3 — VALIDATION (self-check before emitting JSON):
 
 Output: reasoning in plain language, then a single JSON block.
 If you need more history than Block 4A provides, emit NEED_MORE_CONTEXT (max 2 times per cycle).
+If you need current price data to size a position correctly, emit REQUEST_DATA (see system prompt for schema and rules).
 """
 
     user_prompt  = f"--- BLOCK 2: PORTFOLIO ---\n{portfolio_state}\n\n"
@@ -372,55 +475,99 @@ def ask_claude(sys_prompt: str, user_prompt: str) -> dict:
             f"{'=' * 60}"
         )
 
-    try:
-        response = anthropic_client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=2000,
-            system=sys_prompt,
-            messages=[{"role": "user", "content": user_prompt}]
-        )
-        raw     = response.content[0].text
-        in_tok  = response.usage.input_tokens
-        out_tok = response.usage.output_tokens
-        log.info(f"Claude raw response received | tokens: {in_tok} in + {out_tok} out")
+    max_retries = 4
+    base_delay  = 30  # seconds
 
-        # Log full Claude response to app.log
-        log.debug(
-            f"\n{'=' * 60}\n"
-            f"[CLAUDE RESPONSE]\n"
-            f"{'=' * 60}\n"
-            f"{raw}\n"
-            f"{'=' * 60}"
-        )
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = anthropic_client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=2000,
+                system=sys_prompt,
+                messages=[{"role": "user", "content": user_prompt}]
+            )
+            raw     = response.content[0].text
+            in_tok  = response.usage.input_tokens
+            out_tok = response.usage.output_tokens
+            log.info(f"Claude raw response received | tokens: {in_tok} in + {out_tok} out")
 
-        # Extract JSON — three strategies in order of priority:
-        # 1. Fenced ```json ... ``` block
-        # 2. Fenced ``` ... ``` block
-        # 3. Last { ... } block in the response (handles: reasoning prose + raw JSON at end)
-        content = raw
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        else:
-            # Find the last top-level JSON object in the response.
-            # Claude writes prose first, then the JSON — so we scan from the end.
-            start = content.rfind('{')
-            end   = content.rfind('}')
-            if start != -1 and end != -1 and end > start:
-                content = content[start:end + 1].strip()
-            # If no braces found, json.loads will raise and we log the error below.
+            # Log full Claude response to app.log
+            log.debug(
+                f"\n{'=' * 60}\n"
+                f"[CLAUDE RESPONSE]\n"
+                f"{'=' * 60}\n"
+                f"{raw}\n"
+                f"{'=' * 60}"
+            )
 
-        decision = json.loads(content)
-        log.info(f"Claude decided: {decision.get('action')} {decision.get('ticker', '')}")
-        return decision
+            # Extract JSON — three strategies in order of priority:
+            # 1. Fenced ```json ... ``` block
+            # 2. Fenced ``` ... ``` block
+            # 3. Last { ... } block in the response (handles: reasoning prose + raw JSON at end)
+            content = raw
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            else:
+                # Find the last top-level JSON object in the response.
+                # Claude writes prose first, then the JSON — so we scan from the end.
+                start = content.rfind('{')
+                end   = content.rfind('}')
+                if start != -1 and end != -1 and end > start:
+                    content = content[start:end + 1].strip()
+                # If no braces found, json.loads will raise and we log the error below.
 
-    except json.JSONDecodeError as e:
-        log.error(f"Claude returned invalid JSON: {e}\nRaw response: {raw}")
-        return None
-    except Exception as e:
-        log.error(f"Claude API error: {e}\n{traceback.format_exc()}")
-        return None
+            decision = json.loads(content)
+            log.info(f"Claude decided: {decision.get('action')} {decision.get('ticker', '')}")
+            return decision
+
+        except OverloadedError:
+            # Explicit handling for 529 Overloaded (subclass of APIStatusError, but named for clarity)
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))
+                log.warning(f"Claude API overloaded (attempt {attempt}/{max_retries}), retry in {delay}s")
+                time.sleep(delay)
+                continue
+            log.error("Claude API overloaded — max retries reached, skipping cycle")
+            return None
+        except APIStatusError as e:
+            if e.status_code in (429, 500, 502, 503) and attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))  # 30s, 60s, 120s
+                log.warning(f"Claude API transient error (HTTP {e.status_code}), retry {attempt}/{max_retries} in {delay}s")
+                time.sleep(delay)
+                continue
+            log.error(f"Claude API error: {e}\n{traceback.format_exc()}")
+            return None
+        except json.JSONDecodeError as e:
+            # Attempt partial parse via regex before giving up
+            action_m = re.search(r'"action"\s*:\s*"([A-Z_]+)"', raw)
+            conf_m   = re.search(r'"confidence"\s*:\s*([\d.]+)', raw)
+            reason_m = re.search(r'"reasoning"\s*:\s*"([^"]{0,400})', raw)
+            if action_m:
+                ext_action = action_m.group(1)
+                ext_conf   = float(conf_m.group(1)) if conf_m else 0.0
+                ext_reason = (reason_m.group(1) if reason_m else "JSON truncated") + " [partial parse]"
+                if ext_action in ('HOLD', 'REQUEST_DATA', 'NEED_MORE_CONTEXT'):
+                    partial = {"action": ext_action, "confidence": ext_conf, "reasoning": ext_reason}
+                    if ext_action == 'REQUEST_DATA':
+                        t_m = re.search(r'"tickers"\s*:\s*\[([^\]]*)\]', raw)
+                        if t_m:
+                            partial['tickers'] = [
+                                t.strip().strip('"') for t in t_m.group(1).split(',')
+                                if t.strip().strip('"')
+                            ]
+                    log.warning(f"JSON truncated — safe partial parse for action '{ext_action}'")
+                    return partial
+                # BUY/SELL with truncated JSON → risk fields missing → force HOLD
+                log.error(f"JSON truncated on unsafe action '{ext_action}' — forcing HOLD")
+                return {"action": "HOLD", "confidence": ext_conf,
+                        "reasoning": f"Forced HOLD: JSON truncated on {ext_action} (risk fields missing)"}
+            log.error(f"Claude returned invalid JSON: {e}\nRaw response: {raw[:500]}")
+            return None
+        except Exception as e:
+            log.error(f"Claude API error: {e}\n{traceback.format_exc()}")
+            return None
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -517,7 +664,7 @@ def execute_decision(decision: dict, equity: float, last_equity: float):
         log.warning(f"ORDER BLOCKED — unknown action: {action}")
         return
 
-    if action in ('HOLD', 'NEED_MORE_CONTEXT'):
+    if action in ('HOLD', 'NEED_MORE_CONTEXT', 'REQUEST_DATA'):
         log.info(f"No order executed — action: {action}")
         return
 
@@ -598,6 +745,13 @@ def execute_decision(decision: dict, equity: float, last_equity: float):
 def run_cycle() -> tuple:
     """
     One full cycle: session detection → data collection → Claude → execution.
+
+    Two-phase support:
+      Phase 1 — Claude may emit REQUEST_DATA listing tickers it wants priced.
+                 Python fetches real-time OHLCV and appends BLOCK 6 to the prompt.
+      Phase 2 — Claude receives BLOCK 6 and makes the final BUY/SELL/HOLD decision.
+    REQUEST_DATA is allowed only once per cycle; a second REQUEST_DATA forces HOLD.
+
     FIX #5:  MAX_CONTEXT_RETRY = 2 (was effectively 3).
     FIX #10: returns session so main loop doesn't call get_session() a second time.
     Returns: (ran: bool, session: str)
@@ -612,6 +766,7 @@ def run_cycle() -> tuple:
 
     retry_count = 0
     from_date   = None
+    phase1_used = False  # REQUEST_DATA may only occur once per cycle
 
     while retry_count <= MAX_CONTEXT_RETRY:  # FIX #5: 0,1,2 → max 2 retries + initial = 3 calls max
         sys_prompt, user_prompt, equity, last_equity = collect_context(session, from_date)
@@ -636,6 +791,42 @@ def run_cycle() -> tuple:
                     "action":    "HOLD",
                     "reasoning": "Forced HOLD: context still insufficient after 2 retries."
                 }
+
+        elif action == 'REQUEST_DATA':
+            if phase1_used:
+                # Second REQUEST_DATA in the same cycle → guard against infinite loop
+                log.warning("REQUEST_DATA received after Phase 1 already consumed — forcing HOLD")
+                decision = {
+                    "action":    "HOLD",
+                    "reasoning": "Forced HOLD: REQUEST_DATA is not allowed in Phase 2."
+                }
+            else:
+                tickers   = decision.get('tickers', [])
+                reasoning = decision.get('reasoning', '')
+                log.info(f"Phase 1 REQUEST_DATA | tickers: {tickers} | reason: {reasoning}")
+
+                if not tickers:
+                    log.warning("REQUEST_DATA with empty tickers list — forcing HOLD")
+                    decision = {"action": "HOLD", "reasoning": "Forced HOLD: REQUEST_DATA had no tickers."}
+                else:
+                    market_data_block = fetch_market_data(tickers)
+                    phase2_prompt     = user_prompt + f"\n{market_data_block}"
+                    phase1_used       = True
+
+                    log.info(f"Market data fetched for {len(tickers)} ticker(s) — calling Claude Phase 2")
+                    decision = ask_claude(sys_prompt, phase2_prompt)
+
+                    if decision is None:
+                        log.error("No valid decision from Claude Phase 2 — skipping cycle")
+                        return True, session
+
+                    # Guard: Phase 2 must not emit REQUEST_DATA again
+                    if decision.get('action') == 'REQUEST_DATA':
+                        log.warning("REQUEST_DATA returned in Phase 2 — forcing HOLD to prevent loop")
+                        decision = {
+                            "action":    "HOLD",
+                            "reasoning": "Forced HOLD: REQUEST_DATA is not allowed in Phase 2."
+                        }
 
         execute_decision(decision, equity, last_equity)
         break

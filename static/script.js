@@ -55,10 +55,39 @@ function formatCurrency(num) {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
 }
 
+// Stale data tracking
+const lastSuccess = { portfolio: Date.now(), logs: Date.now(), applog: Date.now() };
+const STALE_THRESHOLD_MS = 90000; // 90 seconds
+
+function markStale(containerId, lastTime) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    const age = Date.now() - lastTime;
+    if (age > STALE_THRESHOLD_MS) {
+        el.style.opacity = '0.5';
+        const mins = Math.floor(age / 60000);
+        const badge = el.querySelector('.stale-badge');
+        if (badge) {
+            badge.textContent = `Stale — last updated ${mins}m ago`;
+        } else {
+            const span = document.createElement('div');
+            span.className = 'stale-badge';
+            span.style.cssText = 'color:#ff6b6b;font-size:0.75rem;padding:4px 0;';
+            span.textContent = `Stale — last updated ${mins}m ago`;
+            el.prepend(span);
+        }
+    } else {
+        el.style.opacity = '1';
+        const badge = el.querySelector('.stale-badge');
+        if (badge) badge.remove();
+    }
+}
+
 // Fetch Logic
 async function fetchPortfolio() {
     try {
         const res = await fetch('/api/portfolio', { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
         document.getElementById('total-equity').textContent = formatCurrency(data.equity);
@@ -103,14 +132,17 @@ async function fetchPortfolio() {
             tbody.appendChild(tr);
         });
 
+        lastSuccess.portfolio = Date.now();
     } catch (e) {
         console.error("Failed to fetch portfolio", e);
+        markStale('tab-overview', lastSuccess.portfolio);
     }
 }
 
 async function fetchLogs() {
     try {
         const res = await fetch('/api/log', { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const container = document.getElementById('decisions-log');
         container.innerHTML = '';
@@ -129,12 +161,19 @@ async function fetchLogs() {
             `;
             container.appendChild(div);
         });
-    } catch (e) { }
+
+        lastSuccess.logs = Date.now();
+        markStale('decisions-log', lastSuccess.logs);
+    } catch (e) {
+        console.error("Failed to fetch logs", e);
+        markStale('decisions-log', lastSuccess.logs);
+    }
 }
 
 async function fetchAppLogs() {
     try {
         const res = await fetch('/api/applog', { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const container = document.getElementById('app-log');
         container.innerHTML = '';
@@ -150,13 +189,30 @@ async function fetchAppLogs() {
             div.textContent = line.trim();
             container.appendChild(div);
         });
-    } catch (e) { }
+
+        lastSuccess.applog = Date.now();
+        markStale('app-log', lastSuccess.applog);
+    } catch (e) {
+        console.error("Failed to fetch app logs", e);
+        markStale('app-log', lastSuccess.applog);
+    }
 }
 
+function refreshAll() {
+    fetchPortfolio();
+    fetchLogs();
+    fetchAppLogs();
+}
+
+// Refresh immediately when tab becomes visible again
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+        refreshAll();
+    }
+});
+
 // Init & Loops
-fetchPortfolio();
-fetchLogs();
-fetchAppLogs();
+refreshAll();
 
 setInterval(fetchPortfolio, 30000);
 setInterval(fetchLogs, 30000);

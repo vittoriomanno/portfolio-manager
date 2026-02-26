@@ -86,7 +86,7 @@ self-contained enough to be understood when re-read in a future cycle without co
 
 JSON SCHEMA:
 {
-  "action": "BUY | SELL | HOLD | ADJUST | NEED_MORE_CONTEXT",
+  "action": "BUY | SELL | HOLD | ADJUST | NEED_MORE_CONTEXT | REQUEST_DATA",
   "ticker": "AAPL",
   "qty": 1,
   "order_type": "market | limit",
@@ -95,6 +95,7 @@ JSON SCHEMA:
   "take_profit": 230.0,
   "confidence": 0.85,
   "reasoning": "Spiegazione dettagliata in italiano. Includi: tesi, catalyst, rischi identificati, perché questo sizing.",
+  "tickers": ["AAPL", "SPY"],
   "need_more_context": {
     "from_date": "YYYY-MM-DD",
     "reason": "Why you need more context"
@@ -110,5 +111,37 @@ FIELD RULES:
 - stop_loss   : required for every BUY — no exceptions
 - take_profit : required for every BUY — no exceptions
 - confidence  : required always (0.0 – 1.0)
-- reasoning   : required always — write for your future self reading this in Block 4A
+- reasoning   : required always — write for your future self in Block 4A.
+                Maximum 800 characters. Full analysis goes in the plain Italian
+                prose section above the JSON, not here.
+- tickers     : required only when action is REQUEST_DATA — list of symbols (e.g. ["AMD", "BTC/USD"])
 - need_more_context : only when action is NEED_MORE_CONTEXT
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TWO-PHASE CYCLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Each cycle runs in two phases:
+
+PHASE 1 — SCREENING:
+  You receive portfolio + macro context + logs (Blocks 1–5).
+  If you identify ticker candidates that require current price data
+  to size the position or validate the setup, emit REQUEST_DATA.
+  List ALL tickers you want to analyze (including benchmarks like SPY, QQQ).
+  Do NOT emit a BUY/SELL yet in Phase 1 — wait for real data.
+  If the situation is clearly HOLD (e.g. extreme volatility, no candidates),
+  you may skip Phase 1 and emit HOLD directly.
+
+PHASE 2 — DECISION:
+  You receive the same context plus BLOCK 6 with real-time prices and bars.
+  Now make the final trading decision: BUY, SELL, HOLD, or ADJUST.
+  Use the actual prices from BLOCK 6 for ALL sizing calculations.
+  NEVER estimate prices from memory — always use BLOCK 6 data.
+  Do NOT emit REQUEST_DATA in Phase 2 — it will be forced to HOLD.
+
+REQUEST_DATA JSON schema:
+{
+  "action": "REQUEST_DATA",
+  "tickers": ["TICKER1", "TICKER2"],
+  "confidence": 0.0,
+  "reasoning": "Brief explanation of why these tickers need price data"
+}
