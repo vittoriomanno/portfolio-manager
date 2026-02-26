@@ -851,7 +851,14 @@ if __name__ == "__main__":
                 if session == 'REGULAR':
                     log.info("Next cycle in 1h")
                     time.sleep(3600)
-                elif session in ('PRE_MARKET', 'AFTER_HOURS'):
+                elif session == 'PRE_MARKET':
+                    # Sleep until regular market open (09:30 ET) so the full session is covered
+                    now_et   = datetime.now(ET)
+                    open_et  = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+                    secs     = max(60, (open_et - now_et).total_seconds())
+                    log.info(f"PRE_MARKET done. Next cycle at market open in {secs/60:.0f}m")
+                    time.sleep(secs)
+                elif session == 'AFTER_HOURS':
                     log.info("Next cycle in ~6h")
                     time.sleep(21600)
                 # CLOSED: sleep(60) already done inside run_cycle
