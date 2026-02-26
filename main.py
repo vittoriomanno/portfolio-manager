@@ -23,7 +23,14 @@ from alpaca.data.requests import (
 from alpaca.data.timeframe import TimeFrame
 
 # Anthropic
-from anthropic import Anthropic, APIStatusError, OverloadedError
+from anthropic import Anthropic, APIStatusError
+try:
+    from anthropic import OverloadedError
+except ImportError:
+    # Older SDK versions don't export OverloadedError at the top level.
+    # 529s will still be caught by the APIStatusError handler below (status_code 529).
+    class OverloadedError(APIStatusError):  # type: ignore[misc]
+        pass
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 # Console → INFO only (clean output)
@@ -532,7 +539,7 @@ def ask_claude(sys_prompt: str, user_prompt: str) -> dict:
             log.error("Claude API overloaded — max retries reached, skipping cycle")
             return None
         except APIStatusError as e:
-            if e.status_code in (429, 500, 502, 503) and attempt < max_retries:
+            if e.status_code in (429, 500, 502, 503, 529) and attempt < max_retries:
                 delay = base_delay * (2 ** (attempt - 1))  # 30s, 60s, 120s
                 log.warning(f"Claude API transient error (HTTP {e.status_code}), retry {attempt}/{max_retries} in {delay}s")
                 time.sleep(delay)
