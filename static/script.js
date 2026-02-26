@@ -135,7 +135,7 @@ async function fetchPortfolio() {
         lastSuccess.portfolio = Date.now();
     } catch (e) {
         console.error("Failed to fetch portfolio", e);
-        markStale('tab-overview', lastSuccess.portfolio);
+        markStale('tab-home', lastSuccess.portfolio);
     }
 }
 

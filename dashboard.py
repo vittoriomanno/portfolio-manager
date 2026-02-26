@@ -1,4 +1,5 @@
 import os
+import re
 import json
 from flask import Flask, jsonify, render_template, request
 from dotenv import load_dotenv
@@ -156,15 +157,24 @@ def logs():
     data.sort(key=lambda x: x['time'], reverse=True)
     return jsonify(data[:200])
 
+_LOG_ENTRY_RE = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \|')
+
 @app.route('/api/applog')
 def applog():
     def is_info_or_above(line):
-        """Filter out DEBUG lines (which contain full Claude prompts)."""
+        """Filter out DEBUG lines and multiline continuations (full Claude prompts).
+
+        Log format: "YYYY-MM-DD HH:MM:SS | LEVEL   | message"
+        Lines that don't start with the timestamp pattern are continuation lines
+        of a multiline log.debug() call and must be excluded too.
+        """
         if not line.strip():
             return False
-        # Standard logging format: "2025-01-15 08:00:00 - portfolio_manager - DEBUG - ..."
-        # Accept lines that contain INFO, WARNING, ERROR, CRITICAL; reject DEBUG
-        if ' - DEBUG - ' in line:
+        # Reject continuation lines of multiline log entries (no timestamp prefix)
+        if not _LOG_ENTRY_RE.match(line):
+            return False
+        # Reject DEBUG entries (format uses pipe, not dash)
+        if '| DEBUG' in line:
             return False
         return True
 
