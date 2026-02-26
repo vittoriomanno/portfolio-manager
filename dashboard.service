@@ -7,7 +7,7 @@ User=root
 WorkingDirectory=/opt/portfolio_manager
 Environment="PATH=/opt/portfolio_manager/venv/bin"
 # Using gunicorn for the Flask app
-ExecStart=/opt/portfolio_manager/venv/bin/gunicorn -b 0.0.0.0:8080 dashboard:app
+ExecStart=/opt/portfolio_manager/venv/bin/gunicorn -b 0.0.0.0:8080 --workers 2 --timeout 30 dashboard:app
 Restart=always
 RestartSec=5
 
